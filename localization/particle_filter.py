@@ -7,6 +7,7 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Header
 import tf_transformations
 import tf2_ros
+from loc_msgs.msg import ConeLocation, LocalizationError
 from ackermann_msgs.msg import AckermannDriveStamped
 
 from rclpy.node import Node
@@ -73,7 +74,8 @@ class ParticleFilter(Node):
         self.transform_pub = tf2_ros.TransformBroadcaster(self)
 
         self.drive_publisher = self.create_publisher(AckermannDriveStamped, "/drive", 10)
-
+        self.error_pub = self.create_publisher(LocalizationError, "/localization_error", 10)
+        
         # Initialize the models
         self.motion_model = MotionModel(self)
         self.sensor_model = SensorModel(self)
@@ -92,6 +94,7 @@ class ParticleFilter(Node):
 
         self.particles = np.zeros((200, 3))  # Example: 100 particles
         self.last_pose = None
+        self.first_odom_time = self.get_clock().now()
 
         self.prev_time = self.get_clock().now()
 
@@ -135,6 +138,8 @@ class ParticleFilter(Node):
 
         current_time = self.get_clock().now()
 
+        self.last_pose = self.pose_to_xyt(msg.pose.pose)
+        
         twist = msg.twist.twist
         dx = twist.linear.x
         dy = twist.linear.y
@@ -215,6 +220,22 @@ class ParticleFilter(Node):
 
         # Calculate the mean pose
         mean_pose = calculate_mean_pose(self.particles)
+
+        dx = mean_pose[0] - self.last_pose[0]
+        dy = mean_pose[1] - self.last_pose[1]
+        dtheta = mean_pose[2] - self.last_pose[2]
+        # Normalize dtheta to be between -pi and pi
+        dtheta = (dtheta + np.pi) % (2 * np.pi) - np.pi
+        # geom_diff = np.sqrt(dx**2 + dy**2 + dtheta**2)
+        error_msg = LocalizationError()
+        error_msg.x_error = dx
+        error_msg.y_error = dy
+        error_msg.theta_error = dtheta # np.sqrt(self.relative_x**2 + self.relative_y**2) - self.parking_distance
+        #################################
+        
+        self.error_pub.publish(error_msg)
+
+
         poseObj = self.xyt_to_pose(mean_pose)
 
         transform_msg = TransformStamped()
@@ -233,8 +254,8 @@ class ParticleFilter(Node):
         self.transform_pub.sendTransform(transform_msg)
 
         drive_msg = AckermannDriveStamped()
-        drive_msg.drive.speed = 2.0
-        self.drive_publisher.publish(drive_msg)
+        drive_msg.drive.speed = 1.0
+        # self.drive_publisher.publish(drive_msg)
 
         if self.odom_pub.get_subscription_count() > 0:
             odomMsg = Odometry()
