@@ -16,7 +16,7 @@ class SensorModel:
 
     def __init__(self, node):
         node.declare_parameter('map_topic', "default")
-        node.declare_parameter('num_beams_per_particle', "default")
+        # node.declare_parameter('num_beams_per_particle', "default")
         node.declare_parameter('scan_theta_discretization', "default")
         node.declare_parameter('scan_field_of_view', "default")
         node.declare_parameter('lidar_scale_to_map_scale', 1)
@@ -31,11 +31,11 @@ class SensorModel:
 
         ####################################
         # Adjust these parameters
-        self.alpha_hit = 0
-        self.alpha_short = 0
-        self.alpha_max = 0
-        self.alpha_rand = 0
-        self.sigma_hit = 0
+        self.alpha_hit = 0.74
+        self.alpha_short = 0.07
+        self.alpha_max = 0.07
+        self.alpha_rand = 0.12
+        self.sigma_hit = 8.0
 
         # Your sensor table will be a `table_width` x `table_width` np array:
         self.table_width = 201
@@ -86,8 +86,21 @@ class SensorModel:
         returns:
             No return type. Directly modify `self.sensor_model_table`.
         """
+        z_max = 200
+        z_k = np.linspace(0, z_max, 201)
 
-        raise NotImplementedError
+        for d in np.linspace(0, z_max, 201):
+            p_hit = np.exp(-np.square(z_k - d)/(2*self.sigma_hit**2))
+            p_hit = p_hit / np.sum(p_hit) # multiply by eta=1/sum(p_hit)
+            p_short = np.where(np.logical_and(z_k <= d, d != 0), 2/d * (1 - z_k/d), 0)
+            p_max = np.where(z_k == z_max, 1, 0)
+            p_rand = np.ones(201) * 1/200
+
+            p_totals = p_hit * self.alpha_hit + p_short * self.alpha_short + p_max * self.alpha_max + p_rand * self.alpha_rand
+            p_totals = p_totals / np.sum(p_totals) # normalize p_totals
+            self.sensor_model_table[:, int(d)] = p_totals # this will only work if z_max=200, otherwise find a way to convert d to index
+
+
 
     def evaluate(self, particles, observation):
         """
@@ -123,7 +136,45 @@ class SensorModel:
 
         scans = self.scan_sim.scan(particles)
 
+        conversion = float(self.resolution)*self.lidar_scale_to_map_scale
+
+        d = scans / conversion
+        z_k = observation / conversion
+
+        d_indices = np.round(d).astype(int)
+        d_indices = np.clip(d_indices, 0, 200)
+
+        z_k_indices = np.round(z_k).astype(int) # step 1 is to swap z_k and d (z_k is the faulty lidar scan, d is the ground truth for each particle)
+        z_k_indices = np.clip(z_k_indices, 0, 200) # then, stack some copies of z_k for each 
+
+
+        # probabilities = np.exp(np.sum(np.log(self.sensor_model_table[z_k_indices, d_indices]), axis=1))
+
+        probabilities = np.prod(self.sensor_model_table[z_k_indices, d_indices], axis=1)
+
+        probabilities = np.power(probabilities, 1.0/2.2)
+
+        # probabilities = np.exp(np.sum(np.log(self.sensor_model_table[z_k_indices, d_indices]), axis=1))
+
+
+        # probabilities = []
+        # for _, scan in enumerate(d_indices):
+        #     sum_total = 0
+        #     for i, ray  in enumerate(scan):
+        #         z_k_index = z_k_indices[i]
+        #         log_prob = np.log(self.sensor_model_table[z_k_index, ray])
+        #         sum_total += log_prob
+        #     probabilities.append(np.exp(sum_total))
+        
+
+
+        # probabilities = probabilities / np.sum(probabilities)
+
+        return probabilities
+
         ####################################
+
+        
 
     def map_callback(self, map_msg):
         # Convert the map to a numpy array
