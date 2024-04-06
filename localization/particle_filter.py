@@ -95,7 +95,11 @@ class ParticleFilter(Node):
 
         self.prev_time = self.get_clock().now()
 
+        self.start_time = self.get_clock().now()
+
         self.thread_lock = Lock()
+
+        self.convergence_times = np.array([])
 
 
 
@@ -106,7 +110,8 @@ class ParticleFilter(Node):
         pose = msg.pose.pose  # Extract the Pose from the PoseWithCovarianceStamped message
         x, y, theta = self.pose_to_xyt(pose)
         # Initialize particles around this pose
-        self.particles = np.random.normal([x, y, theta], [1, 1, 0.1], (len(self.particles), 3)) # arbitrarily chosen variances
+        self.particles = np.random.normal([x, y, theta], [0.5, 0.5, 0.1], (len(self.particles), 3)) # arbitrarily chosen variances
+        self.convergence_times = np.array([])
         self.get_logger().info("Pose Init")
 
 
@@ -232,9 +237,23 @@ class ParticleFilter(Node):
         
         self.transform_pub.sendTransform(transform_msg)
 
+
+        current_time = self.get_clock().now()
+
+        # standard deviation
+        distances = np.sqrt(np.power(self.particles[:, 0] - mean_pose[0], 2) +  np.power(self.particles[:, 1] - mean_pose[1], 2))
+        avg_distance = np.mean(distances)
+
+        if (avg_distance < 0.2):
+            diff = float((current_time-self.start_time).nanoseconds/(10**9))
+            self.convergence_times = np.append(self.convergence_times, diff)
+            self.start_time = current_time
+            print("Average convergence time: {}".format(np.mean(self.convergence_times)))
+
+
         drive_msg = AckermannDriveStamped()
         drive_msg.drive.speed = 2.0
-        self.drive_publisher.publish(drive_msg)
+        # self.drive_publisher.publish(drive_msg)
 
         if self.odom_pub.get_subscription_count() > 0:
             odomMsg = Odometry()
